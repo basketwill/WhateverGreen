@@ -9,6 +9,7 @@ WhateverGreen Changelog
 - Added `AppleBacklight` patching code (based on `AppleBacklightFixup` by `hieplpvip`)
 - Enabled CFL backlight patches by default on laptops with CFL graphics
 - Added NVIDIA HDMI enabling code for firmwares that disable it by default (thanks @Fraxul)
+- Fix multiple AMD GPU support improperly handling configuration properties
 
 #### v1.2.4
 - Added platform list dumping to ioreg (at IOService:/IOResources/WhateverGreen), debug build only with -igfxfbdump

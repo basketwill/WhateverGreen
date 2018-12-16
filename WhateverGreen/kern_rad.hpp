@@ -104,8 +104,8 @@ private:
 	/**
 	 *  Current controller property provider
 	 */
-	IOService *currentPropProvider {nullptr};
-	IOService *currentLegacyPropProvider {nullptr};
+	OSDictionary *currentPropProvider {nullptr};
+	OSDictionary *currentLegacyPropProvider {nullptr};
 
 	/**
 	 *  Original populateAccelConfig functions

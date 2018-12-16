@@ -76,6 +76,12 @@ RAD *RAD::callbackRAD;
 void RAD::init() {
 	callbackRAD = this;
 
+	currentPropProvider = OSDictionary::withCapacity(4);
+	currentLegacyPropProvider = OSDictionary::withCapacity(4);
+
+	if (!currentPropProvider || !currentLegacyPropProvider)
+		PANIC("rad", "failed to allocate prop provider dictionaries");
+
 	// Certain displays do not support 32-bit colour output, so we have to force 24-bit.
 	if (getKernelVersion() >= KernelVersion::Sierra && checkKernelArgument("-rad24")) {
 		lilu.onKextLoadForce(&kextRadeonFramebuffer);
@@ -697,9 +703,7 @@ OSObject *RAD::wrapGetProperty(IORegistryEntry *that, const char *aKey) {
 
 	if (props && aKey) {
 		const char *prefix {nullptr};
-		auto provider = callbackRAD->currentLegacyPropProvider;
-		if (!provider)
-			provider = callbackRAD->currentPropProvider;
+		auto provider = OSDynamicCast(IOService, that->getParentEntry(gIOServicePlane));
 		if (provider) {
 			if (aKey[0] == 'a') {
 				if (!strcmp(aKey, "aty_config"))
@@ -729,14 +733,21 @@ OSObject *RAD::wrapGetProperty(IORegistryEntry *that, const char *aKey) {
 
 uint32_t RAD::wrapGetConnectorsInfoV1(void *that, RADConnectors::Connector *connectors, uint8_t *sz) {
 	uint32_t code = FunctionCast(wrapGetConnectorsInfoV1, callbackRAD->orgGetConnectorsInfoV1)(that, connectors, sz);
-	auto props = callbackRAD->currentPropProvider;
-	if (code == 0 && sz && props) {
+
+	char currt[32];
+	snprintf(currt, sizeof(currt), PRIKADDR, CASTKADDR(current_thread()));
+	DBGLOG("rad", "getConnectorsInfoV1 thread is %s", currt);
+	auto currp = OSDynamicCast(OSNumber, callbackRAD->currentPropProvider->getObject(currt));
+
+	if (code == 0 && sz && currp && currp->numberOfBytes() == sizeof(uint64_t)) {
+		auto props = reinterpret_cast<IOService *>(currp->unsigned64BitValue());
+		DBGLOG("rad", "getConnectorsInfoV1 props are " PRIKADDR, CASTKADDR(props));
 		if (getKernelVersion() >= KernelVersion::HighSierra)
 			callbackRAD->updateConnectorsInfo(nullptr, nullptr, props, connectors, sz);
 		else
 			callbackRAD->updateConnectorsInfo(static_cast<void **>(that)[1], callbackRAD->orgGetAtomObjectTableForType, props, connectors, sz);
 	} else {
-		DBGLOG("rad", "getConnectorsInfoV1 failed %X or undefined %d", code, props == nullptr);
+		DBGLOG("rad", "getConnectorsInfoV1 failed %X or undefined %d", code, currp == nullptr);
 	}
 	
 	return code;
@@ -744,23 +755,39 @@ uint32_t RAD::wrapGetConnectorsInfoV1(void *that, RADConnectors::Connector *conn
 
 uint32_t RAD::wrapGetConnectorsInfoV2(void *that, RADConnectors::Connector *connectors, uint8_t *sz) {
 	uint32_t code = FunctionCast(wrapGetConnectorsInfoV2, callbackRAD->orgGetConnectorsInfoV2)(that, connectors, sz);
-	auto props = callbackRAD->currentPropProvider;
-	if (code == 0 && sz && props)
+
+	char currt[32];
+	snprintf(currt, sizeof(currt), PRIKADDR, CASTKADDR(current_thread()));
+	DBGLOG("rad", "getConnectorsInfoV2 thread is %s", currt);
+	auto currp = OSDynamicCast(OSNumber, callbackRAD->currentPropProvider->getObject(currt));
+
+	if (code == 0 && sz && currp && currp->numberOfBytes() == sizeof(uint64_t)) {
+		auto props = reinterpret_cast<IOService *>(currp->unsigned64BitValue());
+		DBGLOG("rad", "getConnectorsInfoV2 props are " PRIKADDR, CASTKADDR(props));
 		callbackRAD->updateConnectorsInfo(nullptr, nullptr, props, connectors, sz);
-	else
-		DBGLOG("rad", "getConnectorsInfoV2 failed %X or undefined %d", code, props == nullptr);
-	
+	} else {
+		DBGLOG("rad", "getConnectorsInfoV2 failed %X or undefined %d", code, currp == nullptr);
+	}
+
 	return code;
 }
 
 uint32_t RAD::wrapLegacyGetConnectorsInfo(void *that, RADConnectors::Connector *connectors, uint8_t *sz) {
 	uint32_t code = FunctionCast(wrapLegacyGetConnectorsInfo, callbackRAD->orgLegacyGetConnectorsInfo)(that, connectors, sz);
-	auto props = callbackRAD->currentLegacyPropProvider;
-	if (code == 0 && sz && props)
+
+	char currt[32];
+	snprintf(currt, sizeof(currt), PRIKADDR, CASTKADDR(current_thread()));
+	DBGLOG("rad", "legacy getConnectorsInfo thread is %s", currt);
+	auto currp = OSDynamicCast(OSNumber, callbackRAD->currentLegacyPropProvider->getObject(currt));
+
+	if (code == 0 && sz && currp && currp->numberOfBytes() == sizeof(uint64_t)) {
+		auto props = reinterpret_cast<IOService *>(currp->unsigned64BitValue());
+		DBGLOG("rad", "legacy getConnectorsInfo props are " PRIKADDR, CASTKADDR(props));
 		callbackRAD->updateConnectorsInfo(static_cast<void **>(that)[1], callbackRAD->orgLegacyGetAtomObjectTableForType, props, connectors, sz);
-	else
-		DBGLOG("rad", "legacy getConnectorsInfo failed %X or undefined %d", code, props == nullptr);
-	
+	} else {
+		DBGLOG("rad", "legacy getConnectorsInfo failed %X or undefined %d", code, currp == nullptr);
+	}
+
 	return code;
 }
 
@@ -830,11 +857,19 @@ bool RAD::wrapATIControllerStart(IOService *ctrl, IOService *provider) {
 		DBGLOG("rad", "disabling video acceleration on request");
 		return false;
 	}
-	
-	callbackRAD->currentPropProvider = provider;
+
+	char currt[32];
+	snprintf(currt, sizeof(currt), PRIKADDR, CASTKADDR(current_thread()));
+	OSNumber *currp = OSNumber::withNumber(reinterpret_cast<uint64_t>(provider), 64);
+	DBGLOG("rad", "starting controller thread is %s, props are " PRIKADDR, currt, CASTKADDR(provider));
+	callbackRAD->currentPropProvider->setObject(currt, currp);
+
 	bool r = FunctionCast(wrapATIControllerStart, callbackRAD->orgATIControllerStart)(ctrl, provider);
-	callbackRAD->currentPropProvider = nullptr;
 	DBGLOG("rad", "starting controller done %d", r);
+
+	callbackRAD->currentPropProvider->removeObject(currt);
+	currp->release();
+
 	return r;
 }
 
@@ -844,10 +879,18 @@ bool RAD::wrapLegacyATIControllerStart(IOService *ctrl, IOService *provider) {
 		DBGLOG("rad", "disabling legacy video acceleration on request");
 		return false;
 	}
-	
-	callbackRAD->currentLegacyPropProvider = provider;
+
+	char currt[32];
+	snprintf(currt, sizeof(currt), PRIKADDR, CASTKADDR(current_thread()));
+	OSNumber *currp = OSNumber::withNumber(reinterpret_cast<uint64_t>(provider), 64);
+	DBGLOG("rad", "starting legacy controller thread is %s, props are " PRIKADDR, currt, CASTKADDR(provider));
+	callbackRAD->currentLegacyPropProvider->setObject(currt, currp);
+
 	bool r = FunctionCast(wrapLegacyATIControllerStart, callbackRAD->orgLegacyATIControllerStart)(ctrl, provider);
-	callbackRAD->currentLegacyPropProvider = nullptr;
-	DBGLOG("rad", "starting legacy controller done %d", r);
+	DBGLOG("rad", "starting legacy legacy controller done %d", r);
+
+	callbackRAD->currentLegacyPropProvider->removeObject(currt);
+	currp->release();
+
 	return r;
 }
